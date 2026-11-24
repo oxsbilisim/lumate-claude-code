@@ -1,0 +1,16 @@
+{
+  "name": "lumate",
+  "version": "0.3.5",
+  "license": "MIT",
+  "description": "Connects Claude Code to your own Lumate: reports your work, shows the questions Lumate is waiting on, and lets Lumate (only Lumate) ask this session for a report. The project's key is read from .lumate.env in the project folder.",
+  "author": { "name": "Lumate" },
+  "keywords": ["lumate", "report", "mcp"],
+  "userConfig": {
+    "lumate_url": {
+      "type": "string",
+      "title": "Lumate address",
+      "description": "The address of your Lumate, for example https://lumate.example.com (no slash at the end). The project dialog in Lumate shows it.",
+      "required": true
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "lumate": {
+      "type": "http",
+      "url": "${user_config.lumate_url}/mcp",
+      "headersHelper": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/headers.sh\" \"${CLAUDE_PROJECT_DIR}\""
+    }
+  }
+}

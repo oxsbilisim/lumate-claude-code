@@ -1,0 +1,13 @@
+{
+  "name": "lumate",
+  "owner": { "name": "Lumate" },
+  "metadata": { "description": "Lumate for Claude Code: report your work to your Lumate, see its questions." },
+  "plugins": [
+    {
+      "name": "lumate",
+      "source": "./plugins/lumate",
+      "description": "Reports your Claude Code work to your own Lumate and shows the questions Lumate is waiting on.",
+      "version": "0.3.5"
+    }
+  ]
+}
