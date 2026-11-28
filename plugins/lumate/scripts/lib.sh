@@ -32,6 +32,14 @@ lumate_get() {
     curl -sS --fail --connect-timeout 2 --max-time "$2" --max-filesize 16384 -K - "${LUMATE_URL%/}$1" 2>/dev/null
 }
 
+# lumate_poll <path> <max seconds> <body file>: like lumate_get, but tells WHY it failed: prints the HTTP status (000 when Lumate
+# could not be reached at all) and leaves the body in <body file>. The waiter stops on 401/403 and retries everything else.
+lumate_poll() {
+  code=$(printf 'header = "Authorization: Bearer %s"\n' "$LUMATE_TOKEN" |
+    curl -sS --connect-timeout 2 --max-time "$2" --max-filesize 16384 -K - -o "$3" -w '%{http_code}' "${LUMATE_URL%/}$1" 2>/dev/null)
+  case $code in [0-9][0-9][0-9]) printf '%s' "$code" ;; *) printf '000' ;; esac
+}
+
 # The person's own private state folder (flags, shown question ids): 0700, old files removed after 7 days.
 lumate_state_dir() {
   dir=${CLAUDE_PLUGIN_DATA:-${XDG_STATE_HOME:-${HOME:-}/.local/state}/lumate}
@@ -135,16 +143,41 @@ lumate_wrap() {
   printf '%s\n' ">>> end of Lumate text"
 }
 
-# A colleague's question or report (not the owner's own work) makes this session read-only until lumate_reply or 15 minutes.
-lumate_mark() { dir=$(lumate_state_dir) && date +%s >"$dir/colleague-$1.marker" 2>/dev/null; }
-lumate_unmark() { dir=$(lumate_state_dir) && rm -f "$dir/colleague-$1.marker"; }
+# A colleague's question or report (never the owner's own work) makes this session read-only until THAT request is answered: one marker
+# per delivered request id (written at delivery), lifted only for the id whose reply Lumate's server accepted, or after 15 minutes.
+lumate_mark() { dir=$(lumate_state_dir) && date +%s >"$dir/colleague-$1-$2.marker" 2>/dev/null; }
+lumate_unmark() { dir=$(lumate_state_dir) && rm -f "$dir/colleague-$1-$2.marker"; }
+# lumate_marked <sid>: some marker of this session is younger than the limit.
 lumate_marked() {
   dir=$(lumate_state_dir) || return 1
-  at=$(cat "$dir/colleague-$1.marker" 2>/dev/null)
-  case $at in '' | *[!0-9]*) return 1 ;; esac
-  [ $(( $(date +%s) - at )) -lt "${LUMATE_READONLY_SECONDS:-900}" ]
+  for f in "$dir"/colleague-"$1"-*.marker; do
+    [ -f "$f" ] || continue
+    at=$(cat "$f" 2>/dev/null)
+    case $at in '' | *[!0-9]*) continue ;; esac
+    [ $(( $(date +%s) - at )) -lt "${LUMATE_READONLY_SECONDS:-900}" ] && return 0
+  done
+  return 1
 }
-# lumate_note_requests <sid> <text>: marks the session read-only when the text holds a question or a report request.
-lumate_note_requests() { printf '%s' "$2" | grep -Eq '^kind: (question|report)$' && lumate_mark "$1"; return 0; }
+# lumate_note_requests <sid> <text>: a marker for every question or report request in the text, named by its id (a request with no usable
+# id gets the id "x", which no reply can lift: it ends by the time limit).
+lumate_note_requests() {
+  for rid in $(printf '%s\n' "$2" | awk '/^id: [0-9]+$/ { id = $2 } /^kind: (question|report)$/ { print (id == "" ? "x" : id) } /^>>> END OF LUMATE REQUEST$/ { id = "" }'); do
+    lumate_mark "$1" "$rid"
+  done
+  return 0
+}
+# lumate_reply_accepted <sid> <hook input json>: after a lumate_reply, lifts the read-only guard for that request id, and only when Lumate's
+# server says that request is answered (the reply was accepted); a refused or forged reply lifts nothing.
+lumate_reply_accepted() {
+  rid=$(printf '%s' "$2" | sed -n 's/.*"request_id" *: *\([0-9][0-9]*\).*/\1/p' | head -n 1)
+  [ -n "$rid" ] || return 0
+  state=$(lumate_get "/api/connector/sessions/request-state?request_id=$rid" 3 2>/dev/null) || return 0
+  [ "$state" = answered ] && lumate_unmark "$1" "$rid"
+  return 0
+}
+# lumate_root_key <dir>: a hash of the project folder (never the path), so Lumate can tell two checkouts of one repository apart.
+lumate_root_key() {
+  { printf '%s' "$1" | shasum -a 256 2>/dev/null || printf '%s' "$1" | sha256sum 2>/dev/null || printf '%s' "$1" | openssl dgst -sha256 2>/dev/null; } | tr -cd '0-9a-f' | cut -c1-64
+}
 # lumate_tool_name <hook input json>
 lumate_tool_name() { printf '%s' "$1" | sed -n 's/.*"tool_name" *: *"\([A-Za-z0-9_]*\)".*/\1/p' | head -n 1; }

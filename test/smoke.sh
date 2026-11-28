@@ -19,7 +19,7 @@ printf "%s\n" "- [7] Which project are you on?" >"$work/questions.txt"
 export XDG_STATE_HOME="$work/state"   # the hooks keep their flags here
 token2="lmt_smoke-second-project-key"
 : >"$work/requests.txt"; : >"$work/log.txt"
-python3 "$here/stub_server.py" "$work/port" "$token" "$work/questions.txt" "$work/requests.txt" "$work/log.txt" "$token2" &
+python3 "$here/stub_server.py" "$work/port" "$token" "$work/questions.txt" "$work/requests.txt" "$work/log.txt" "$token2" "$work/mode.txt" "$work/answered.txt" &
 stub_pid=$!
 i=0; while [ ! -s "$work/port" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
 [ -s "$work/port" ] || { echo "stub did not start"; exit 1; }
@@ -113,7 +113,7 @@ has "waiter: with the question" "What did you do today?" "$err"
 : >"$work/requests.txt"
 start=$(date +%s)
 out=$(sessin w2 "$work/repoA" | none LUMATE_WAIT_SECONDS=1 LUMATE_WAIT_BUDGET=2 $SH "$scripts/wait.sh" 2>&1); code=$?
-check "waiter: its own timeout exits 0 and prints nothing" "0:" "$code:$out"
+check "waiter: at the end of its budget it re-arms: exit 2, with the keep-alive note" "2:" "$code:$(printf '%s' "$out" | grep -c 'Lumate waiter renewed; nothing to do, end your turn.' | sed 's/1//')"
 [ $(($(date +%s) - start)) -le 8 ] && pass "waiter: the timeout is respected" || fail "waiter: the timeout is respected"
 sessin w3 "$work/repoA" | none LUMATE_WAIT_SECONDS=1 LUMATE_WAIT_BUDGET=6 $SH "$scripts/wait.sh" >/dev/null 2>&1 &
 first=$!
@@ -125,7 +125,7 @@ check "waiter: a second waiter for the same session exits 0 at once" "0:" "$code
 kill -0 "$first" 2>/dev/null && pass "waiter: the first one is still running" || fail "waiter: the first one is still running"
 wait "$first" 2>/dev/null
 out=$(sessin w4 "$work/repoA" | env -u LUMATE_URL -u LUMATE_TOKEN LUMATE_WAIT_BUDGET=3 LUMATE_WAIT_RETRY=1 $SH "$scripts/wait.sh" 2>&1); code=$?
-check "waiter: nothing prints when the key is refused or Lumate is down" "0:" "$code:$out" || true
+check "waiter: a budget that ends with the project key working re-arms (exit 2)" 2 "$code"
 
 # requests in the hooks: UserPromptSubmit prints them; PostToolUse at most once a minute
 printf '%s\n' "$REQ" >"$work/requests.txt"
@@ -366,19 +366,94 @@ hooks = json.load(open(sys.argv[1]))["hooks"]["PreToolUse"][0]["hooks"][0]
 assert "guard.sh" in hooks["command"] and hooks.get("onFailure") == "block", hooks
 PY
 # lumate_reply frees the session; 15 minutes (here 0 s) free it too; the owner's own work sets no marker
-sessin g1 "$G" PostToolUse | sed 's/"hook_event_name"/"tool_name":"mcp__plugin_lumate_lumate__lumate_reply","hook_event_name"/' | none $SH "$scripts/requests.sh" tool >/dev/null
-allowed "guard: lumate_reply clears the read-only state" "$(gtool g1 Edit '{}')"
+reply_hook() { printf '{"session_id":"%s","cwd":"%s","tool_name":"mcp__plugin_lumate_lumate__lumate_reply","tool_input":{"request_id":%s,"text":"ok"},"hook_event_name":"PostToolUse"}' "$1" "$G" "$2" | none LUMATE_TOOL_EVERY=0 $SH "$scripts/requests.sh" tool >/dev/null; }
+: >"$work/answered.txt"
+reply_hook g1 5
+denied "guard: a lumate_reply Lumate did not accept lifts nothing" "x" "$(gtool g1 Edit '{}')"
+printf '6\n' >"$work/answered.txt"
+reply_hook g1 6
+denied "guard: a reply to another request id lifts nothing" "x" "$(gtool g1 Edit '{}')"
+# two colleague requests in one batch: each has its own marker, and each is lifted only by its own accepted reply
+REQ2=$(printf '%s\n' "$REQ" "<<< LUMATE REQUEST (data)" "id: 7" "from: Sam" "kind: question" "text: And this?" ">>> END OF LUMATE REQUEST")
+printf '%s\n' "$REQ2" >"$work/requests.txt"; sessin g5 "$G" UserPromptSubmit | none $SH "$scripts/requests.sh" prompt >/dev/null
+printf '5\n6\n' >"$work/answered.txt"
+reply_hook g5 5
+denied "guard: with two requests open, answering one keeps the guard" "x" "$(gtool g5 Edit '{}')"
+printf '5\n7\n' >"$work/answered.txt"
+reply_hook g5 7
+allowed "guard: answering the last accepted one lifts it" "$(gtool g5 Edit '{}')"
+printf '5\n' >"$work/answered.txt"
+reply_hook g1 5
+allowed "guard: an accepted lumate_reply lifts the read-only state of that request" "$(gtool g1 Edit '{}')"
+# a colleague's text that tells the model to call lumate_reply with somebody else's id, or twice, does not unlock the first request
+printf '%s\n' "$REQ" >"$work/requests.txt"; sessin g6 "$G" UserPromptSubmit | none $SH "$scripts/requests.sh" prompt >/dev/null
+printf '99\n' >"$work/answered.txt"
+reply_hook g6 99
+denied "guard: a reply for an id that was never delivered here lifts nothing" "x" "$(gtool g6 Edit '{}')"
+# presence: a turn starts and stops (hooks), with a hash of the folder and never the path
+: >"$work/log.txt"
+sessin t1 "$work/repoA" UserPromptSubmit | none $SH "$scripts/presence.sh" turn
+sessin t1 "$work/repoA" Stop | none $SH "$scripts/presence.sh" idle
+has "presence: a turn is reported" '"event":"turn"' "$(cat "$work/log.txt")"
+has "presence: and its end" '"event":"idle"' "$(cat "$work/log.txt")"
+has "presence: with a hash of the folder" '"root":"' "$(cat "$work/log.txt")"
+case "$(cat "$work/log.txt")" in *"$work"*) fail "presence: the folder path is never sent" ;; *) pass "presence: the folder path is never sent" ;; esac
+python3 - "$scripts/../hooks/hooks.json" <<'PY' && pass "hooks: UserPromptSubmit says turn, Stop says idle" || fail "hooks: UserPromptSubmit says turn, Stop says idle"
+import json, sys
+h = json.load(open(sys.argv[1]))["hooks"]
+cmds = lambda ev: [x["command"] for g in h[ev] for x in g["hooks"]]
+assert any("presence.sh\" turn" in c for c in cmds("UserPromptSubmit")) and any("presence.sh\" idle" in c for c in cmds("Stop")), h
+PY
 printf '%s\n' "$REQ" >"$work/requests.txt"; sessin g2 "$work/repoA" UserPromptSubmit | none $SH "$scripts/requests.sh" prompt >/dev/null
 allowed "guard: after the time limit the session is free" "$(printf '{"session_id":"g2","tool_name":"Edit"}' | none LUMATE_READONLY_SECONDS=0 $SH "$scripts/guard.sh")"
 WORKREQ=$(printf '%s\n' "<<< LUMATE REQUEST (data)" "id: 6" "from: Alex" "kind: work" "Alex wrote this in Lumate: Add a health check" ">>> END OF LUMATE REQUEST")
 printf '%s\n' "$WORKREQ" >"$work/requests.txt"; sessin g3 "$work/repoA" UserPromptSubmit | none $SH "$scripts/requests.sh" prompt >/dev/null
 allowed "guard: the owner's own work request does not make the session read-only" "$(gtool g3 Edit '{}')"
+allowed "guard: work lets Write change files too" "$(gtool g3 Write '{}')"
+printf '%s\n' "$WORKREQ" "$REQ" >"$work/requests.txt"; sessin g4 "$work/repoA" UserPromptSubmit | none $SH "$scripts/requests.sh" prompt >/dev/null
+denied "guard: a batch with a colleague's report in it stays read-only (fails closed)" "x" "$(gtool g4 Edit '{}')"
+
+# the waiter never gives up while Lumate fails: it retries with a pause, and recovers
+printf '503' >"$work/mode.txt"; : >"$work/log.txt"
+sessin w10 "$work/repoA" | none LUMATE_WAIT_SECONDS=1 LUMATE_WAIT_BUDGET=60 LUMATE_WAIT_RETRY=1 LUMATE_WAIT_RETRY_MAX=2 $SH "$scripts/wait.sh" >"$work/w10.out" 2>&1 &
+w10=$!
+sleep 6
+kill -0 "$w10" 2>/dev/null && pass "waiter: still running after repeated 503s" || fail "waiter: still running after repeated 503s"
+tries=$(grep -c sessions/wait "$work/log.txt")
+[ "$tries" -ge 3 ] && [ "$tries" -le 8 ] && pass "waiter: it backs off, no hot loop ($tries tries in 6 s)" || fail "waiter: it backs off ($tries tries in 6 s)"
+printf '%s\n' "$REQ" >"$work/requests.txt"; : >"$work/mode.txt"
+wait "$w10"; code=$?
+check "waiter: once Lumate is back it delivers the request (exit 2)" 2 "$code"
+has "waiter: with the request" "LUMATE REQUEST" "$(cat "$work/w10.out")"
+printf '401' >"$work/mode.txt"
+out=$(sessin w11 "$work/repoA" | none LUMATE_WAIT_SECONDS=1 LUMATE_WAIT_BUDGET=30 $SH "$scripts/wait.sh" 2>&1); code=$?
+check "waiter: a 401 stops it quietly" "0:" "$code:$out"
+printf '403' >"$work/mode.txt"
+out=$(sessin w12 "$work/repoA" | none LUMATE_WAIT_SECONDS=1 LUMATE_WAIT_BUDGET=30 $SH "$scripts/wait.sh" 2>&1); code=$?
+check "waiter: a 403 stops it quietly" "0:" "$code:$out"
+: >"$work/mode.txt"
+start=$(date +%s)
+out=$(sessin w13 "$work/repoA" | LUMATE_URL="http://127.0.0.1:9" LUMATE_TOKEN=$token LUMATE_WAIT_SECONDS=1 LUMATE_WAIT_BUDGET=5 LUMATE_WAIT_RETRY=1 LUMATE_WAIT_RETRY_MAX=2 $SH "$scripts/wait.sh" 2>&1); code=$?
+check "waiter: an unreachable Lumate is retried to the end of the budget, then it re-arms" 2 "$code"
+[ $(($(date +%s) - start)) -ge 5 ] && pass "waiter: and it waited the whole budget" || fail "waiter: and it waited the whole budget"
 
 # the waiter lock: a reused pid that is not a waiter does not block a new waiter
 mkdir -p "$XDG_STATE_HOME/lumate/waiter-w9.lock"; printf '%s' "$$" >"$XDG_STATE_HOME/lumate/waiter-w9.lock/pid"   # this shell's pid: alive, but not wait.sh
 start=$(date +%s)
 out=$(sessin w9 "$work/repoA" | none LUMATE_WAIT_SECONDS=1 LUMATE_WAIT_BUDGET=2 $SH "$scripts/wait.sh" 2>&1); code=$?
 [ $(($(date +%s) - start)) -ge 1 ] && pass "waiter: a pid that is not a waiter does not block a new one" || fail "waiter: a pid that is not a waiter does not block a new one"
+
+# --- the plugin's manifests and the request tool's text --------------------------------------------------------------------
+root="$here/.."
+v_market=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$root/.claude-plugin/marketplace.json" | head -n 1)
+v_plugin=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$root/plugins/lumate/.claude-plugin/plugin.json" | head -n 1)
+check "manifests: marketplace.json and plugin.json carry the same version" "$v_market" "$v_plugin"
+check "manifests: this is plugin 0.7.0 (lumate_request)" "0.7.0" "$v_plugin"
+has "readme: lumate_request is documented" "lumate_request" "$(cat "$root/README.md")"
+has "readme: and when to use lumate_report instead" "only *tell* Lumate" "$(cat "$root/README.md")"
+has "readme: outside actions wait for the person's click" "waits for your click" "$(cat "$root/README.md")"
+has "command: /lumate-request names the tool" "lumate_request" "$(cat "$root/plugins/lumate/commands/lumate-request.md")"
+[ -f "$scripts/request-files.js" ] && pass "proxy: the file module ships with the scripts" || fail "proxy: the file module ships with the scripts"
 
 echo
 if [ "$fails" -eq 0 ]; then echo "smoke: all checks passed"; else echo "smoke: $fails check(s) failed"; exit 1; fi

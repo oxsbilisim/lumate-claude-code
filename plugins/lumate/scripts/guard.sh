@@ -1,6 +1,6 @@
 #!/bin/sh
-# PreToolUse: while a colleague's question or report request is open in this session (a marker written when it was delivered, cleared by
-# lumate_reply or after 15 minutes) the session may only READ, by a strict allowlist; every other tool is denied:
+# PreToolUse: while a colleague's question or report request is open in this session (one marker per delivered request, lifted for that request only after
+# Lumate's server accepted its lumate_reply, or after 15 minutes) the session may only READ, by a strict allowlist; every other tool is denied:
 #   Read (the path is checked), Glob and Grep (path and glob checked; Grep names or counts only), Bash limited to plain read-only git
 #   commands that print no file content (or only a checked path), the lumate_reply tool, and TodoWrite/Skill/ToolSearch (loading lumate_reply). No shell, no quotes or
 #   globs, no secret-like path. The owner's own work requests set no marker. No network. Never blocks when no request is open.

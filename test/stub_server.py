@@ -1,5 +1,5 @@
 """A stand-in for Lumate's connector routes, for smoke.sh.
-Usage: stub_server.py PORT_FILE TOKEN QUESTIONS_FILE REQUESTS_FILE LOG_FILE [EXTRA_TOKENS_COMMA_SEPARATED]
+Usage: stub_server.py PORT_FILE TOKEN QUESTIONS_FILE REQUESTS_FILE LOG_FILE [EXTRA_TOKENS_COMMA_SEPARATED [MODE_FILE]]
 - GET  /api/connector/questions?format=text   the questions file
 - GET  /api/connector/sessions/wait|requests   the requests file, once (then it is emptied); 204 when empty
 - POST /api/connector/sessions/presence        logged
@@ -11,6 +11,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 TOKENS = {sys.argv[2], *[t for t in (sys.argv[6].split(",") if len(sys.argv) > 6 else []) if t]}
 QUESTIONS, REQUESTS, LOG = sys.argv[3], sys.argv[4], sys.argv[5]
+MODE = sys.argv[7] if len(sys.argv) > 7 else ""   # optional: a file whose first line is an HTTP status that every sessions/wait call answers with (e.g. 503)
+ANSWERED = sys.argv[8] if len(sys.argv) > 8 else ""   # optional: a file with the ids (one per line) of requests the server accepted a reply for
 ENV_TEXT = "LUMATE_URL=http://127.0.0.1:1\nLUMATE_TOKEN=lmt_from-the-link-endpoint\nLUMATE_PROJECT=ACM-1\n"
 
 
@@ -34,7 +36,18 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(401, b'{"detail":"bad"}')
         if self.path.startswith("/api/connector/questions"):
             return self.reply(200, open(QUESTIONS, encoding="utf-8").read().encode())
+        if self.path.startswith("/api/connector/sessions/request-state"):
+            rid = self.path.split("request_id=")[-1]
+            done = open(ANSWERED, encoding="utf-8").read().split() if ANSWERED else []
+            return self.reply(200, b"answered" if rid in done else b"open")
         if self.path.startswith(("/api/connector/sessions/wait", "/api/connector/sessions/requests")):
+            if MODE and self.path.startswith("/api/connector/sessions/wait"):
+                try:
+                    forced = open(MODE, encoding="utf-8").read().strip()
+                except OSError:
+                    forced = ""
+                if forced.isdigit():
+                    return self.reply(int(forced), b"{}")
             text = open(REQUESTS, encoding="utf-8").read()
             if not text.strip():
                 return self.reply(204)

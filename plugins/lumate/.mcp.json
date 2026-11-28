@@ -1,9 +1,10 @@
 {
   "mcpServers": {
     "lumate": {
-      "type": "http",
-      "url": "${user_config.lumate_url}/mcp",
-      "headersHelper": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/headers.sh\" \"${CLAUDE_PROJECT_DIR}\""
+      "type": "stdio",
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/mcp-proxy.js", "${CLAUDE_PROJECT_DIR}"],
+      "env": { "LUMATE_PROXY_URL": "${user_config.lumate_url}" }
     }
   }
 }

@@ -1,8 +1,11 @@
 #!/bin/sh
 # The waiter (SessionStart and Stop, as an asyncRewake hook): holds a long poll on Lumate and, when Lumate has a request for this
 # session, exits with code 2 and the fenced request on stderr, which wakes Claude even when the session is idle. One waiter per
-# session (a lock folder keyed by the session id); a second start exits at once. Gives up quietly 60 seconds before the hook's own
-# time limit, when the key is refused, or when Lumate stays unreachable. Needs the project's .lumate.env or LUMATE_URL/LUMATE_TOKEN.
+# session (a lock folder keyed by the session id); a second start exits at once. Never gives up while the session is open: when Lumate is
+# unreachable or fails (5xx, a dropped connection) it retries with a growing pause (2 s, 4 s ... at most 60 s) until its budget ends.
+# It stops quietly only when the key is refused (401/403: a new key is needed). At the end of its budget (60 seconds before the hook's
+# own time limit) it re-arms: exit 2 with a one-line keep-alive note, which makes Claude take one tiny turn, and the Stop hook then
+# starts a fresh waiter. Needs the project's .lumate.env or LUMATE_URL/LUMATE_TOKEN.
 input=$(cat 2>/dev/null)
 here=$(cd "$(dirname "$0")" && pwd) || exit 0
 . "$here/lib.sh" || exit 0
@@ -22,24 +25,36 @@ fi
 printf '%s' "$$" >"$lock/pid"
 trap 'rm -rf "$lock"' EXIT
 trap 'exit 0' INT TERM HUP
-budget=${LUMATE_WAIT_BUDGET:-21540}   # the hook's timeout is 21600
+budget=${LUMATE_WAIT_BUDGET:-28740}   # the hook's timeout is 28800 (8 h); Claude Code applies a hook's timeout as written, with no cap
 poll=${LUMATE_WAIT_SECONDS:-50}
-retry=${LUMATE_WAIT_RETRY:-30}
+retry=${LUMATE_WAIT_RETRY:-2}          # the first pause after a failure; it doubles each time
+retry_max=${LUMATE_WAIT_RETRY_MAX:-60}
 start=$(date +%s)
-fails=0
+pause=$retry
+body_file="$lock/body"
 while :; do
   t0=$(date +%s)
   left=$((budget - (t0 - start)))
-  [ "$left" -gt 0 ] || exit 0
-  n=$poll; [ "$left" -lt "$n" ] && n=$left
-  if text=$(lumate_get "/api/connector/sessions/wait?session_id=$sid&role=$(lumate_role)&timeout=$n" $((n + 10))); then
-    fails=0
-    text=$(printf '%s' "$text" | lumate_clean)
-    if [ -n "$text" ]; then lumate_note_requests "$sid" "$text"; printf '%s\n' "$text" | lumate_wrap >&2; exit 2; fi
-    [ $(($(date +%s) - t0)) -ge 1 ] || sleep 1   # an answer that came at once is not polled in a hot loop
-  else
-    fails=$((fails + 1))
-    [ "$fails" -lt 10 ] || exit 0
-    sleep "$retry"
+  if [ "$left" -le 0 ]; then
+    printf '%s\n' "Lumate waiter renewed; nothing to do, end your turn." | lumate_wrap >&2
+    exit 2
   fi
+  n=$poll; [ "$left" -lt "$n" ] && n=$left
+  code=$(lumate_poll "/api/connector/sessions/wait?session_id=$sid&role=$(lumate_role)&timeout=$n" "$((n + 10))" "$body_file")
+  case $code in
+    200 | 204)
+      pause=$retry
+      text=
+      [ "$code" = 200 ] && text=$(cat "$body_file" 2>/dev/null | lumate_clean)
+      if [ -n "$text" ]; then lumate_note_requests "$sid" "$text"; printf '%s\n' "$text" | lumate_wrap >&2; exit 2; fi
+      [ $(($(date +%s) - t0)) -ge 1 ] || sleep 1   # an answer that came at once is not polled in a hot loop
+      ;;
+    401 | 403) exit 0 ;;   # the key is refused: a new one is needed, so stay quiet
+    *)
+      left=$((budget - ($(date +%s) - start)))
+      p=$pause; [ "$p" -gt "$left" ] && p=$left
+      [ "$p" -le 0 ] || sleep "$p"
+      pause=$((pause * 2)); [ "$pause" -le "$retry_max" ] || pause=$retry_max
+      ;;
+  esac
 done

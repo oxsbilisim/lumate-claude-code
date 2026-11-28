@@ -6,8 +6,8 @@
     {
       "name": "lumate",
       "source": "./plugins/lumate",
-      "description": "Reports your Claude Code work to your own Lumate and shows the questions Lumate is waiting on.",
-      "version": "0.3.5"
+      "description": "Reports your Claude Code work to your own Lumate, lets you hand Lumate a task from Claude Code, and shows the questions Lumate is waiting on.",
+      "version": "0.7.0"
     }
   ]
 }

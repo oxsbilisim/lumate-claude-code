@@ -26,7 +26,7 @@
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/wait.sh\"",
             "asyncRewake": true,
-            "timeout": 21600
+            "timeout": 28800
           }
         ]
       }
@@ -34,6 +34,11 @@
     "UserPromptSubmit": [
       {
         "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/presence.sh\" turn",
+            "timeout": 3
+          },
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/questions.sh\"",
@@ -63,6 +68,11 @@
         "hooks": [
           {
             "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/presence.sh\" idle",
+            "timeout": 3
+          },
+          {
+            "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/stop-report.sh\"",
             "timeout": 8
           }
@@ -74,7 +84,7 @@
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/wait.sh\"",
             "asyncRewake": true,
-            "timeout": 21600
+            "timeout": 28800
           }
         ]
       }

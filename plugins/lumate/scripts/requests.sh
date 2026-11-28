@@ -12,7 +12,7 @@ lumate_setup "$input"
 lumate_ready || exit 0
 dir=$(lumate_state_dir) || exit 0
 if [ "$mode" = "tool" ]; then
-  case $(lumate_tool_name "$input") in *lumate_reply) lumate_unmark "$sid" ;; esac   # the answer is sent: the session is free again
+  case $(lumate_tool_name "$input") in *lumate_reply) lumate_reply_accepted "$sid" "$input" ;; esac   # the guard lifts for that request only, and only once Lumate accepted the reply
   stamp="$dir/requests-$sid.stamp"
   now=$(date +%s)
   last=$(cat "$stamp" 2>/dev/null)
